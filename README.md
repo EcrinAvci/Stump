@@ -4,6 +4,8 @@ Bu proje, ahşap kütüklerin kesim optimizasyonu için geliştirilmiş kapsaml�
 
 ## 🚀 Özellikler
 
+![Uygulama Ekran Görüntüsü](assets/screenshot.png)
+
 ### 📊 Console Uygulaması (C#)
 - Kütük boyutu ve adet girişi
 - Parça boyutları ve adet belirleme
