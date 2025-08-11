@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <title>Kütük Kesim Görselleştirme</title>
+  <style>
+    body { margin: 0; background: #222; color: #fff; font-family: sans-serif; }
+    #panel { position: absolute; top: 10px; left: 10px; background: #333; padding: 16px; border-radius: 8px; z-index: 10; }
+    #panel input { width: 60px; }
+    #panel label { margin-right: 8px; }
+    #panel button { margin-top: 8px; }
+  </style>
+</head>
+<body>
+<div id="panel">
+  <label>Kütük Boyu (cm): <input type="number" id="logLength" value="400"></label><br>
+  <label>Kütük Adedi: <input type="number" id="logCount" value="2"></label><br>
+  <label>Testere Payı (cm): <input type="number" id="kerf" value="1" step="0.1"></label><br>
+  <label>Parça 1 (cm): <input type="number" id="piece1" value="15.2"></label>
+  <label>Adet: <input type="number" id="adet1" value="10"></label><br>
+  <label>Parça 2 (cm): <input type="number" id="piece2" value="14.2"></label>
+  <label>Adet: <input type="number" id="adet2" value="1"></label><br>
+  <label>Parça 3 (cm): <input type="number" id="piece3" value="13.2"></label>
+  <label>Adet: <input type="number" id="adet3" value="10"></label><br>
+  <button onclick="drawLog()">Hesapla ve Göster</button>
+  <br><br>
+  <button onclick="zoomIn()">Yakınlaştır (+)</button>
+  <button onclick="zoomOut()">Uzaklaştır (-)</button>
+</div>
+<div id="sonuclar" style="position:absolute;top:10px;right:10px;background:#333;padding:16px;border-radius:8px;z-index:10;max-width:350px;"></div>
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+<script>
+let scene, camera, renderer, meshes = [];
+
+initThree();
+drawLog();
+
+function initThree() {
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+  renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  // Işık
+  const light = new THREE.PointLight(0xffffff, 1, 100);
+  light.position.set(0, 5, 10);
+  scene.add(light);
+
+  camera.position.set(2, 2, 8);
+  camera.lookAt(2, 0, 0);
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  animate();
+}
+
+function drawLog() {
+  meshes.forEach(m => scene.remove(m));
+  meshes = [];
+
+  const logLength = parseFloat(document.getElementById('logLength').value);
+  const logCount = parseInt(document.getElementById('logCount').value);
+  const kerf = parseFloat(document.getElementById('kerf').value);
+  const pieceLengths = [
+    parseFloat(document.getElementById('piece1').value),
+    parseFloat(document.getElementById('piece2').value),
+    parseFloat(document.getElementById('piece3').value)
+  ];
+  const adetler = [
+    parseInt(document.getElementById('adet1').value),
+    parseInt(document.getElementById('adet2').value),
+    parseInt(document.getElementById('adet3').value)
+  ];
+
+  // --- HATALI GİRİŞ KONTROLÜ ---
+  let hata = false;
+  let hataMesaj = "";
+  if (!(logLength > 0 && logCount > 0 && kerf > 0) || isNaN(logLength) || isNaN(logCount) || isNaN(kerf)) {
+    hata = true;
+    hataMesaj = "Kütük boyu, kütük adedi ve testere payı 0'dan büyük ve sayısal olmalı.";
+  } else if (logLength < 1 || logLength > 10000) {
+    hata = true;
+    hataMesaj = "Kütük boyu 1 ile 10.000 cm arasında olmalı.";
+  } else if (logCount < 1 || logCount > 1000) {
+    hata = true;
+    hataMesaj = "Kütük adedi 1 ile 1000 arasında olmalı.";
+  } else if (kerf < 0.01 || kerf > 10) {
+    hata = true;
+    hataMesaj = "Testere payı 0.01 ile 10 cm arasında olmalı.";
+  } else if (!pieceLengths.some(x => x > 0 && !isNaN(x)) || !adetler.some(x => x > 0 && !isNaN(x))) {
+    hata = true;
+    hataMesaj = "En az bir parça boyu ve adedi 0'dan büyük ve sayısal olmalı.";
+  } else if (pieceLengths.some(x => x > logLength)) {
+    hata = true;
+    hataMesaj = "Parça boyları kütük boyundan büyük olamaz.";
+  } else if (adetler.some(x => isNaN(x) || x < 0)) {
+    hata = true;
+    hataMesaj = "Adetler negatif, boş veya sayısal olmayan değer olamaz.";
+  } else if (pieceLengths.some(x => isNaN(x) || x < 0.1 || x > logLength)) {
+    hata = true;
+    hataMesaj = "Parça boyları 0.1 cm'den küçük veya kütük boyundan büyük olamaz.";
+  } else if (adetler.some(x => x > 1000)) {
+    hata = true;
+    hataMesaj = "Parça adedi 1000'den fazla olamaz.";
+  }
+  if (hata) {
+    meshes.forEach(m => scene.remove(m));
+    meshes = [];
+    document.getElementById('sonuclar').innerHTML = `<b style='color:#e74c3c'>Verdiğiniz değerlerle işlem yapılamaz:<br>${hataMesaj}</b>`;
+    renderer.render(scene, camera);
+    return;
+  }
+
+  let colorList = ['#e74c3c', '#27ae60', '#2980b9'];
+  const gap = 0.5;
+  const logGap = 10;
+
+  // Kamera ayarları (her hesaplamada merkezde tut)
+  const toplam_kutuk_boyu = logLength * logCount;
+  const centerX = toplam_kutuk_boyu / 2 / 100;
+  camera.position.set(centerX, 2, 8);
+  camera.lookAt(centerX, 0, 0);
+
+  // --- ANA ÜRETİM GÖRSELİ ---
+  let anaPieces = [];
+  let anaPos = 0;
+  let anaColorList = ['#e74c3c', '#27ae60', '#2980b9'];
+  for (let j = 0; j < pieceLengths.length; j++) {
+    for (let a = 0; a < adetler[j]; a++) {
+      anaPieces.push({type: 'parca'+(j+1), start: anaPos, length: pieceLengths[j], color: anaColorList[j]});
+      anaPos += pieceLengths[j];
+      if (anaPos + gap <= toplam_kutuk_boyu) {
+        anaPieces.push({type: 'gap', start: anaPos, length: gap, color: '#222'});
+        anaPos += gap;
+      }
+      if (anaPos + kerf <= toplam_kutuk_boyu) {
+        anaPieces.push({type: 'kerf', start: anaPos, length: kerf, color: '#888888'});
+        anaPos += kerf;
+      }
+    }
+  }
+  if (anaPos < toplam_kutuk_boyu && (toplam_kutuk_boyu - anaPos) > 0.01) {
+    anaPieces.push({type: 'fire', start: anaPos, length: toplam_kutuk_boyu - anaPos, color: '#2222ff'});
+  }
+  anaPieces.forEach(piece => {
+    const radius = 0.5;
+    const height = piece.length/100;
+    const geometry = new THREE.CylinderGeometry(radius, radius, height, 32);
+    const material = new THREE.MeshLambertMaterial({ color: piece.color });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.x = (piece.start + piece.length/2)/100;
+    mesh.position.y = 0.7;
+    mesh.rotation.z = Math.PI/2;
+    scene.add(mesh);
+    meshes.push(mesh);
+  });
+
+  // --- ANA ÜRETİM HESAPLAMA ---
+  let sonucHTML = `<b>Sonuçlar:</b><br>`;
+  sonucHTML += `Toplam kütük boyu: <b>${toplam_kutuk_boyu}</b> cm (${logCount} kütük × ${logLength} cm)<br>`;
+  for (let j = 0; j < pieceLengths.length; j++) {
+    sonucHTML += `Parça ${j+1}: <b>${adetler[j]}</b> adet, boy: ${pieceLengths[j]} cm<br>`;
+  }
+  let toplam_kullanilan_uzunluk = 0;
+  let toplam_kesim = 0;
+  for (let j = 0; j < pieceLengths.length; j++) {
+    toplam_kullanilan_uzunluk += adetler[j] * pieceLengths[j];
+    toplam_kesim += adetler[j];
+  }
+  let toplam_testere_kaybi = (toplam_kesim > 0 ? toplam_kesim - 1 : 0) * kerf;
+  let toplam = toplam_kullanilan_uzunluk + toplam_testere_kaybi;
+  let fire = toplam_kutuk_boyu - toplam;
+  if (isNaN(toplam) || isNaN(fire) || toplam < 0 || fire < 0) {
+    meshes.forEach(m => scene.remove(m));
+    meshes = [];
+    document.getElementById('sonuclar').innerHTML = `<b style='color:#e74c3c'>Verdiğiniz değerlerle işlem yapılamaz:<br>Hesaplama sırasında hata oluştu.</b>`;
+    renderer.render(scene, camera);
+    return;
+  }
+  sonucHTML += `Toplam testere kaybı: <b>${toplam_testere_kaybi}</b> cm<br>`;
+  sonucHTML += `Fire (artık): <b>${fire.toFixed(2)}</b> cm<br>`;
+
+  // --- EKSTRA OPTİMİZASYON ---
+  if (fire > 0) {
+    let kalan_boy = fire;
+    let ekstra_adetler = [0,0,0];
+    let ekstra_testere_kaybi = 0;
+    let eklendi = true;
+    while (eklendi = false, true) {
+      eklendi = false;
+      for (let j = 0; j < pieceLengths.length; j++) {
+        if (kalan_boy >= pieceLengths[j] + (ekstra_adetler[j] + adetler[j] > 0 ? kerf : 0) && pieceLengths[j] > 0) {
+          if (ekstra_adetler[j] + adetler[j] > 0) {
+            kalan_boy -= kerf;
+            ekstra_testere_kaybi += kerf;
+          }
+          kalan_boy -= pieceLengths[j];
+          ekstra_adetler[j]++;
+          eklendi = true;
+        }
+      }
+      if (!eklendi) break;
+    }
+    let final_fire = kalan_boy;
+    if (isNaN(final_fire) || final_fire < 0) {
+      meshes.forEach(m => scene.remove(m));
+      meshes = [];
+      document.getElementById('sonuclar').innerHTML = `<b style='color:#e74c3c'>Verdiğiniz değerlerle işlem yapılamaz:<br>Ekstra optimizasyon sırasında hata oluştu.</b>`;
+      renderer.render(scene, camera);
+      return;
+    }
+    let ekstra_parca_var = ekstra_adetler.some(x => x > 0);
+    if (ekstra_parca_var) {
+      sonucHTML += `<br><b style='color:#27ae60'>=== EKSTRA OPTİMİZASYON ===</b><br>`;
+      sonucHTML += `Artık kütükten ekstra üretilebilecek:<br>`;
+      for (let j = 0; j < pieceLengths.length; j++) {
+        if (ekstra_adetler[j] > 0) {
+          sonucHTML += `Parça ${j+1}: +<b>${ekstra_adetler[j]}</b> adet (toplam: <b>${adetler[j] + ekstra_adetler[j]}</b> adet)<br>`;
+        }
+      }
+      sonucHTML += `Ekstra testere kaybı: <b>${ekstra_testere_kaybi}</b> cm<br>`;
+      sonucHTML += `Final fire: <b>${final_fire.toFixed(2)}</b> cm`;
+
+      // --- EKSTRA ÜRETİM GÖRSELİ ---
+      let ekstraPieces = [];
+      let ekstraPos = 0;
+      let ekstraColorList = ['#e74c3c', '#27ae60', '#2980b9'];
+      let ekstraAdetlerCopy = ekstra_adetler.slice();
+      let ekstraFire = fire;
+      let ekstraEklendi = true;
+      while (ekstraEklendi) {
+        ekstraEklendi = false;
+        for (let j = 0; j < pieceLengths.length; j++) {
+          if (ekstraAdetlerCopy[j] > 0 && ekstraPos + pieceLengths[j] < fire) {
+            ekstraPieces.push({type: 'parca'+(j+1), start: ekstraPos, length: pieceLengths[j], color: ekstraColorList[j]});
+            ekstraPos += pieceLengths[j];
+            ekstraAdetlerCopy[j]--;
+            if (ekstraPos + gap <= fire) {
+              ekstraPieces.push({type: 'gap', start: ekstraPos, length: gap, color: '#222'});
+              ekstraPos += gap;
+            }
+            if (ekstraPos + kerf <= fire) {
+              ekstraPieces.push({type: 'kerf', start: ekstraPos, length: kerf, color: '#888888'});
+              ekstraPos += kerf;
+            }
+            ekstraEklendi = true;
+          }
+        }
+      }
+      if (ekstraPos < fire && (fire - ekstraPos) > 0.01) {
+        ekstraPieces.push({type: 'fire', start: ekstraPos, length: fire - ekstraPos, color: '#2222ff'});
+      }
+      // Fire silindiriyle çakışan veya fire'ın içine taşan parçaları çizme
+      ekstraPieces = ekstraPieces.filter(piece => {
+        if (piece.type.startsWith('parca')) {
+          return (piece.start + piece.length) < fire;
+        }
+        return true;
+      });
+      ekstraPieces.forEach(piece => {
+        const radius = 0.5;
+        const height = piece.length/100;
+        const geometry = new THREE.CylinderGeometry(radius, radius, height, 32);
+        const material = new THREE.MeshLambertMaterial({ color: piece.color });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.x = (piece.start + piece.length/2)/100;
+        mesh.position.y = -2.2;
+        mesh.rotation.z = Math.PI/2;
+        scene.add(mesh);
+        meshes.push(mesh);
+      });
+    } else {
+      sonucHTML += `<br>Artık kütükten ekstra parça çıkarılamaz.`;
+    }
+  }
+  document.getElementById('sonuclar').innerHTML = sonucHTML;
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera);
+}
+
+function zoomIn() {
+  camera.position.z = Math.max(camera.position.z - 0.5, 2);
+}
+function zoomOut() {
+  camera.position.z = Math.min(camera.position.z + 0.5, 50);
+}
+document.addEventListener('keydown', function(e) {
+  if (e.key === '+' || e.key === '=') {
+    zoomIn();
+  } else if (e.key === '-' || e.key === '_') {
+    zoomOut();
+  }
+});
+</script>
+</body>
+</html> 
